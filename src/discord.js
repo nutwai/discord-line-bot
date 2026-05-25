@@ -6,8 +6,9 @@ const {
 } = require('discord.js');
 const config = require('./config');
 const { formatToFlexMessage } = require('./formatter');
-const { pushMessage } = require('./line');
+const { broadcastMessage } = require('./line');
 const channels = require('./channels');
+const subscribers = require('./subscribers');
 
 // Create Discord client with required intents
 const client = new Client({
@@ -36,7 +37,8 @@ client.on(Events.MessageCreate, async (msg) => {
 
   try {
     const flexMsg = formatToFlexMessage(msg);
-    await pushMessage(flexMsg);
+    const targets = subscribers.listSubscribers();
+    await broadcastMessage(targets, flexMsg);
   } catch (err) {
     console.error('❌ Failed to forward message:', err.message);
   }

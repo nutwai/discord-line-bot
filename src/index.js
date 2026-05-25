@@ -1,6 +1,7 @@
 const { start, client } = require('./discord');
 const { startServer } = require('./webhook');
 const channels = require('./channels');
+const subscribers = require('./subscribers');
 
 console.log('─────────────────────────────────────────');
 console.log('  Discord → LINE Notification Bridge');
@@ -8,6 +9,7 @@ console.log('──────────────────────�
 
 // Load saved channels
 channels.load();
+subscribers.load();
 
 // Start the webhook server (LINE commands + health check)
 startServer();

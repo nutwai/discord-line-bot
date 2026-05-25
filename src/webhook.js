@@ -34,22 +34,131 @@ app.post('/webhook', async (req, res) => {
   res.status(200).send('OK');
 
   // Parse events
+  const subscribers = require('./subscribers');
+  const lineModule = require('./line');
+  const menu = require('./menu');
+
+  // Local state machine for admin conversational flow
+  const userStates = {};
+
+  async function processEvent(event) {
+    const userId = event.source.userId;
+
+    // Security: only the primary owner (LINE_TARGET_ID) can manage the bot
+    if (userId !== config.line.targetId) {
+      console.log(`🚫 Unauthorized interaction from: ${userId}`);
+      return;
+    }
+
+    // Handle Postback (Button Clicks)
+    if (event.type === 'postback') {
+      const data = event.postback.data;
+      
+      if (data === 'action=manage_channels') {
+        await sendReply(event.replyToken, menu.createChannelMenu());
+      } 
+      else if (data === 'action=manage_subscribers') {
+        await sendReply(event.replyToken, menu.createSubscriberMenu());
+      }
+      else if (data === 'action=view_status') {
+        const chans = channels.listChannels();
+        const subs = subscribers.listSubscribers();
+        await sendReply(event.replyToken, {
+          type: 'text',
+          text: `📊 สถานะปัจจุบัน:\n\n💬 ห้อง Discord ที่ดึงข้อความ (${chans.length} ห้อง):\n${chans.join('\n') || '-'}\n\n👥 จำนวนผู้รับแจ้งเตือน: ${subs.length} คน`
+        });
+      }
+      else if (data === 'action=add_channel_prompt') {
+        userStates[userId] = 'WAIT_ADD_CHANNEL';
+        await sendReply(event.replyToken, { type: 'text', text: 'พิมพ์ ID ของห้อง Discord ที่ต้องการเพิ่มได้เลยครับ' });
+      }
+      else if (data === 'action=remove_channel_prompt') {
+        userStates[userId] = 'WAIT_REMOVE_CHANNEL';
+        await sendReply(event.replyToken, { type: 'text', text: 'พิมพ์ ID ของห้อง Discord ที่ต้องการลบได้เลยครับ' });
+      }
+      else if (data === 'action=add_sub_prompt') {
+        userStates[userId] = 'WAIT_ADD_SUB';
+        await sendReply(event.replyToken, { type: 'text', text: 'พิมพ์ User ID (ตัว U) หรือ Group ID (ตัว C) ที่ต้องการเพิ่มได้เลยครับ' });
+      }
+      else if (data === 'action=remove_sub_prompt') {
+        userStates[userId] = 'WAIT_REMOVE_SUB';
+        await sendReply(event.replyToken, { type: 'text', text: 'พิมพ์ User ID ที่ต้องการลบได้เลยครับ' });
+      }
+      return;
+    }
+
+    // Handle Text Messages
+    if (event.type === 'message' && event.message.type === 'text') {
+      const text = event.message.text.trim();
+
+      // Check if waiting for input
+      const state = userStates[userId];
+      if (state) {
+        delete userStates[userId]; // clear state
+        
+        if (state === 'WAIT_ADD_CHANNEL') {
+          if (channels.addChannel(text)) {
+            await sendReply(event.replyToken, { type: 'text', text: `✅ เพิ่มห้อง ${text} เรียบร้อยแล้ว` });
+          } else {
+            await sendReply(event.replyToken, { type: 'text', text: `⚠️ ห้อง ${text} มีอยู่แล้วครับ` });
+          }
+          return;
+        }
+        
+        if (state === 'WAIT_REMOVE_CHANNEL') {
+          if (channels.removeChannel(text)) {
+            await sendReply(event.replyToken, { type: 'text', text: `🗑️ ลบห้อง ${text} ออกแล้ว` });
+          } else {
+            await sendReply(event.replyToken, { type: 'text', text: `⚠️ ไม่พบห้อง ${text} ในระบบ` });
+          }
+          return;
+        }
+
+        if (state === 'WAIT_ADD_SUB') {
+          if (subscribers.addSubscriber(text)) {
+            await sendReply(event.replyToken, { type: 'text', text: `✅ เพิ่มผู้รับ ${text} เรียบร้อยแล้ว` });
+          } else {
+            await sendReply(event.replyToken, { type: 'text', text: `⚠️ ผู้รับ ${text} มีอยู่แล้วครับ` });
+          }
+          return;
+        }
+
+        if (state === 'WAIT_REMOVE_SUB') {
+          if (subscribers.removeSubscriber(text)) {
+            await sendReply(event.replyToken, { type: 'text', text: `🗑️ ลบผู้รับ ${text} ออกแล้ว` });
+          } else {
+            await sendReply(event.replyToken, { type: 'text', text: `⚠️ ไม่พบผู้รับ ${text} ในระบบ หรือเป็น ID แอดมินหลักที่ไม่สามารถลบได้` });
+          }
+          return;
+        }
+      }
+
+      // Default to sending the Admin Menu for any other text (or specific commands)
+      await sendReply(event.replyToken, menu.createAdminMenu());
+    }
+  }
+
+  const { client } = require('./line');
+  async function sendReply(replyToken, message) {
+    try {
+      const msgs = Array.isArray(message) ? message : [message];
+      await client.replyMessage({
+        replyToken: replyToken,
+        messages: msgs,
+      });
+    } catch (err) {
+      console.error('❌ Reply error:', err.message);
+      if (err.originalError && err.originalError.response) {
+        console.error('   Details:', JSON.stringify(err.originalError.response.data, null, 2));
+      }
+    }
+  }
+
   const parsed = JSON.parse(body.toString());
   const events = parsed.events || [];
 
   for (const event of events) {
-    if (event.type !== 'message' || event.message.type !== 'text') continue;
-
-    const userId = event.source.userId;
-    const text = event.message.text.trim();
-
-    // Only allow the configured owner
-    if (userId !== config.line.targetId) {
-      console.log(`🚫 Unauthorized command from: ${userId}`);
-      continue;
-    }
-
-    await handleCommand(text, event.replyToken);
+    await processEvent(event);
   }
 });
 
@@ -65,83 +174,7 @@ function verifySignature(body, signature) {
   return hash === signature;
 }
 
-/**
- * Handle /add, /remove, /list commands from LINE chat.
- */
-async function handleCommand(text, replyToken) {
-  const parts = text.split(/\s+/);
-  const cmd = parts[0].toLowerCase();
-  const arg = parts[1];
 
-  let replyText;
-
-  switch (cmd) {
-    case '/add': {
-      if (!arg) {
-        replyText = '❌ ใช้: /add <channel_id>';
-        break;
-      }
-      if (channels.addChannel(arg)) {
-        replyText = `✅ เพิ่มห้อง ${arg} แล้ว\n\n📋 ดูทั้งหมด: /list`;
-      } else {
-        replyText = `⚠️ ห้อง ${arg} มีอยู่แล้ว`;
-      }
-      break;
-    }
-    case '/remove': {
-      if (!arg) {
-        replyText = '❌ ใช้: /remove <channel_id>';
-        break;
-      }
-      if (channels.removeChannel(arg)) {
-        replyText = `✅ ลบห้อง ${arg} แล้ว\n\n📋 ดูทั้งหมด: /list`;
-      } else {
-        replyText = `⚠️ ไม่พบห้อง ${arg}`;
-      }
-      break;
-    }
-    case '/list': {
-      const list = channels.listChannels();
-      if (list.length === 0) {
-        replyText = '📋 ยังไม่มีห้องที่เฝ้าดู\n\nใช้ /add <channel_id> เพื่อเพิ่ม';
-      } else {
-        replyText = `📋 ห้องที่เฝ้าดู (${list.length}):\n\n${list.map((id, i) => `${i + 1}. ${id}`).join('\n')}`;
-      }
-      break;
-    }
-    case '/help': {
-      replyText = '📖 คำสั่งที่ใช้ได้:\n\n/add <channel_id> — เพิ่มห้อง\n/remove <channel_id> — ลบห้อง\n/list — ดูรายการห้องทั้งหมด\n/help — แสดงคำสั่ง';
-      break;
-    }
-    default:
-      return; // ไม่ใช่คำสั่ง — ไม่ต้องตอบ
-  }
-
-  if (replyText) {
-    await replyToLine(replyToken, replyText);
-  }
-}
-
-/**
- * Reply to a LINE message using the reply token.
- */
-async function replyToLine(replyToken, text) {
-  try {
-    await fetch('https://api.line.me/v2/bot/message/reply', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${config.line.channelAccessToken}`,
-      },
-      body: JSON.stringify({
-        replyToken,
-        messages: [{ type: 'text', text }],
-      }),
-    });
-  } catch (err) {
-    console.error('❌ Reply failed:', err.message);
-  }
-}
 
 /**
  * Start the Express server.

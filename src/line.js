@@ -6,40 +6,51 @@ const client = new messagingApi.MessagingApiClient({
 });
 
 /**
- * Push a message to the configured LINE target (user or group).
+ * Broadcast message(s) to multiple LINE targets.
+ * @param {string[]} userIds — Array of LINE User IDs
  * @param {object|object[]} messages — LINE message object(s)
  */
-async function pushMessage(messages) {
+async function broadcastMessage(userIds, messages) {
+  if (!userIds || userIds.length === 0) return;
+  
   const msgs = Array.isArray(messages) ? messages : [messages];
+  
   try {
-    await client.pushMessage({
-      to: config.line.targetId,
-      messages: msgs,
-    });
-    console.log(`✅ LINE: pushed ${msgs.length} message(s)`);
+    if (userIds.length === 1) {
+      // Single push
+      await client.pushMessage({
+        to: userIds[0],
+        messages: msgs,
+      });
+    } else {
+      // Multicast to many
+      await client.multicast({
+        to: userIds,
+        messages: msgs,
+      });
+    }
+    console.log(`✅ LINE: broadcasted ${msgs.length} message(s) to ${userIds.length} subscriber(s)`);
   } catch (err) {
-    // Rate limit — back off and retry once
+    // Basic rate limit handling
     if (err.statusCode === 429) {
       console.warn('⚠️  LINE rate limited — retrying in 3s...');
       await sleep(3000);
       try {
-        await client.pushMessage({
-          to: config.line.targetId,
-          messages: msgs,
-        });
-        console.log(`✅ LINE: pushed after retry`);
+        if (userIds.length === 1) {
+          await client.pushMessage({ to: userIds[0], messages: msgs });
+        } else {
+          await client.multicast({ to: userIds, messages: msgs });
+        }
+        console.log(`✅ LINE: broadcasted after retry`);
       } catch (retryErr) {
         console.error('❌ LINE retry failed:', retryErr.message);
       }
       return;
     }
-    console.error('❌ LINE push error:', err.message);
+    
+    console.error('❌ LINE broadcast error:', err.message);
     if (err.originalError && err.originalError.response) {
       console.error('   Details:', JSON.stringify(err.originalError.response.data, null, 2));
-    } else if (err.response) {
-      console.error('   Details:', JSON.stringify(err.response.data, null, 2));
-    } else {
-      console.error('   Raw Error:', err);
     }
   }
 }
@@ -48,4 +59,4 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-module.exports = { pushMessage };
+module.exports = { client, broadcastMessage };
