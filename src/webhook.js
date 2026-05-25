@@ -19,6 +19,12 @@ app.get('/', (_req, res) => {
 });
 
 /**
+ * Local state machine for admin conversational flow
+ * (Must be outside app.post to persist across requests)
+ */
+const userStates = {};
+
+/**
  * LINE Webhook endpoint
  */
 app.post('/webhook', async (req, res) => {
@@ -38,9 +44,7 @@ app.post('/webhook', async (req, res) => {
   const lineModule = require('./line');
   const menu = require('./menu');
 
-  // Local state machine for admin conversational flow
-  const userStates = {};
-
+  // Local state machine for admin conversational flow (MOVED OUTSIDE)
   async function processEvent(event) {
     const userId = event.source.userId;
 
