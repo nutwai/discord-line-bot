@@ -48,8 +48,12 @@ app.post('/webhook', async (req, res) => {
   async function processEvent(event) {
     const userId = event.source.userId;
 
-    // Security: only the primary owner (LINE_TARGET_ID) can manage the bot
-    if (userId !== config.line.targetId) {
+    // Security: allow primary owner and the requested additional admin
+    const adminIds = [
+      config.line.targetId,
+      'U7650fcea4ce978aed5e4de050523b4ad'
+    ];
+    if (!adminIds.includes(userId)) {
       console.log(`🚫 Unauthorized interaction from: ${userId}`);
       return;
     }
